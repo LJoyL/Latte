@@ -27,9 +27,9 @@ Latte helps you **focus on content — not syntax**.
 
 ## 🔹 Frontend
 
+- **Vite**
 - **Vue**
 - **Monaco Editor** – Code editor (used in VS Code)
-- **Tiptap** – For rich-text (WYSIWYG) visual editing
 - **Tailwind CSS** – Styling system
 
 ## 🔹 Backend
