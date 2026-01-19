@@ -386,9 +386,16 @@ pub async fn compile_typst_string_to_pdf(
         .map_err(|e| format!("failed to write temp file: {}", e))?;
 
     let entry_path = temp_file.path().to_path_buf();
-    drop(temp_file); // Close the file
-
-    compile_typst_to_pdf(entry_path.to_string_lossy().to_string()).await
+    
+    // We must keep the file alive while compiling
+    // compile_typst_to_pdf reads the file from disk
+    let result = compile_typst_to_pdf(entry_path.to_string_lossy().to_string()).await;
+    
+    // Explicitly drop temp_file here (though it would happen at end of scope anyway)
+    // This ensures it survives until after compilation
+    drop(temp_file);
+    
+    result
 }
 
 /// Diagnostic information for frontend display
