@@ -7,6 +7,14 @@
       @workspace-selected="handleWorkspaceSelected"
     />
 
+    <!-- Template Selection Modal -->
+    <TemplateModal
+      v-if="showTemplateModal"
+      :workspace-path="workspacePath"
+      @close="showTemplateModal = false"
+      @template-selected="handleTemplateSelected"
+    />
+
     <!-- Simple Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
@@ -20,6 +28,9 @@
         <button class="btn" @click="handleOpenFile" title="Open File">Open</button>
         <button class="btn" @click="handleSaveFile" :disabled="!currentFile" title="Save">
           Save
+        </button>
+        <button class="btn" @click="handleSaveAsTemplate" :disabled="!currentFile" title="Save as Template">
+          Save Tmpl
         </button>
         <div class="divider"></div>
         <button
@@ -62,11 +73,12 @@
       <!-- Workspace Sidebar -->
       <WorkspaceSidebar
         v-if="workspacePath"
+        :key="sidebarKey"
         :workspace-path="workspacePath"
         :workspace-name="workspaceName"
         :current-file="currentFile"
         @file-selected="handleFileSelected"
-        @template-selected="handleTemplateSelected"
+        @template-selected="(name) => handleTemplateSelected(name, true)"
       />
 
       <!-- Editor Panel -->
@@ -112,6 +124,7 @@ import RichTextEditor from './components/RichTextEditor.vue';
 import PreviewPanel from './components/PreviewPanel.vue';
 import WorkspaceSelector from './components/WorkspaceSelector.vue';
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue';
+import TemplateModal from './components/TemplateModal.vue';
 
 const currentFile = ref<string | null>(null);
 const fileContent = ref<string>('#set page(margin: 2cm)\n\n= Hello, Typst!\n\nThis is a simple Typst document.\n\n');
@@ -120,8 +133,10 @@ const autoCompile = ref(true);
 const pdfPreviewData = ref<Uint8Array | null>(null);
 const isCompiling = ref(false);
 const showWorkspaceSelector = ref(true); // Show on startup
+const showTemplateModal = ref(false);
 const workspacePath = ref<string | null>(null);
 const workspaceName = ref<string>('');
+const sidebarKey = ref(0);
 let compileTimeout: NodeJS.Timeout | null = null;
 
 // Auto-compile on content change
@@ -144,39 +159,8 @@ const handleContentChanged = (content: string) => {
   fileContent.value = content;
 };
 
-const handleNewFile = async () => {
-  try {
-    // Ask user where to save
-    const filePath = await save({
-      filters: [
-        {
-          name: 'Typst',
-          extensions: ['typ'],
-        },
-      ],
-      defaultPath: 'document.typ',
-    });
-
-    if (filePath && typeof filePath === 'string') {
-      // Create empty file
-      const defaultContent = '#set page(margin: 2cm)\n\n= New Document\n\n';
-      await invoke('write_file', {
-        path: filePath,
-        contents: defaultContent,
-      });
-      currentFile.value = filePath;
-      fileContent.value = defaultContent;
-      // Auto-compile if enabled
-      if (autoCompile.value) {
-        await compileToPDF();
-      }
-    }
-  } catch (error) {
-    console.error('Failed to create new file:', error);
-    // If user cancelled, just create untitled document
-    currentFile.value = null;
-    fileContent.value = '#set page(margin: 2cm)\n\n= New Document\n\n';
-  }
+const handleNewFile = () => {
+  showTemplateModal.value = true;
 };
 
 const handleOpenFile = async () => {
@@ -212,6 +196,34 @@ const handleSaveFile = async () => {
     });
   } catch (error) {
     console.error('Failed to save file:', error);
+  }
+};
+
+const handleSaveAsTemplate = async () => {
+  if (!workspacePath.value) {
+    alert('Please open a workspace to save templates.');
+    return;
+  }
+  
+  const name = prompt('Enter template name:');
+  if (!name) return;
+  
+  try {
+    await invoke('add_workspace_template', {
+      workspace_path: workspacePath.value,
+      template_name: name,
+      template_content: fileContent.value,
+    });
+    alert('Template saved!');
+    sidebarKey.value++; // Refresh sidebar
+    // Trigger refresh of sidebar if possible, or just wait for next load
+    // Ideally we would emit an event or update a shared store, but for now this is fine.
+    // To update sidebar we would need to trigger it. 
+    // We can re-fetch workspace data in App.vue if we extracted that logic.
+    // But Sidebar has its own fetch.
+  } catch (error) {
+    console.error('Failed to save template:', error);
+    alert('Failed to save template');
   }
 };
 
@@ -300,27 +312,34 @@ const handleFileSelected = async (filePath: string) => {
   }
 };
 
-const handleTemplateSelected = async (templateName: string) => {
-  if (!workspacePath.value) return;
+const handleTemplateSelected = async (templateName: string, isWorkspace: boolean) => {
+  showTemplateModal.value = false;
   
   try {
-    const templateContent = await invoke<string>('get_workspace_template', {
-      workspace_path: workspacePath.value,
-      template_name: templateName,
+    let content = '';
+    if (isWorkspace && workspacePath.value) {
+       content = await invoke('get_workspace_template', { 
+         workspace_path: workspacePath.value,
+         template_name: templateName 
+       });
+    } else {
+       content = await invoke('get_template', { name: templateName });
+    }
+    
+    // Ask user where to save
+    const filePath = await save({
+      filters: [{ name: 'Typst', extensions: ['typ'] }],
+      defaultPath: `${templateName}.typ`
     });
     
-    // Create new document from template in workspace root
-    const newFileName = `${templateName}-${Date.now()}.typ`;
-    const newFilePath = `${workspacePath.value}/${newFileName}`;
-    
-    await invoke('write_file', {
-      path: newFilePath,
-      contents: templateContent,
-    });
-    
-    await handleFileSelected(newFilePath);
+    if (filePath && typeof filePath === 'string') {
+        // Write file
+        await invoke('write_file', { path: filePath, contents: content });
+        // Open it
+        await handleFileSelected(filePath);
+    }
   } catch (error) {
-    console.error('Failed to load template:', error);
+    console.error('Failed to create file from template:', error);
   }
 };
 
