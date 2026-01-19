@@ -12,7 +12,10 @@
   "dependencies": {
     "vue": "^3.5.13",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "monaco-editor": "^0.45.0",
+    "@monaco-editor/loader": "^1.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",

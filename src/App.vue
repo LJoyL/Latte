@@ -1,160 +1,489 @@
-<script setup lang="ts">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-
-const greetMsg = ref("");
-const name = ref("");
-
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
-}
-</script>
-
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
+  <div class="app-container">
+    <!-- Workspace Selector Modal -->
+    <WorkspaceSelector
+      v-if="showWorkspaceSelector"
+      @close="showWorkspaceSelector = false"
+      @workspace-selected="handleWorkspaceSelected"
+    />
 
-    <div class="row">
-      <a href="https://vitejs.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+    <!-- Simple Toolbar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button class="btn" @click="showWorkspaceSelector = true" title="Workspace">
+          <span>📁</span> Workspace
+        </button>
+        <div class="divider"></div>
+        <button class="btn" @click="handleNewFile" title="New File">
+          <span>+</span> New
+        </button>
+        <button class="btn" @click="handleOpenFile" title="Open File">Open</button>
+        <button class="btn" @click="handleSaveFile" :disabled="!currentFile" title="Save">
+          Save
+        </button>
+        <div class="divider"></div>
+        <button
+          class="btn mode-btn"
+          :class="{ active: editorMode === 'code' }"
+          @click="editorMode = 'code'"
+        >
+          Code
+        </button>
+        <button
+          class="btn mode-btn"
+          :class="{ active: editorMode === 'rich' }"
+          @click="editorMode = 'rich'"
+        >
+          Rich
+        </button>
+      </div>
+      <div class="toolbar-center">
+        <span v-if="workspaceName" class="workspace-name">{{ workspaceName }}</span>
+        <span v-if="currentFile" class="file-name">{{ getFileName(currentFile) }}</span>
+        <span v-else class="file-name">Untitled</span>
+      </div>
+      <div class="toolbar-right">
+        <label class="auto-compile-toggle">
+          <input type="checkbox" v-model="autoCompile" />
+          <span>Auto-compile</span>
+        </label>
+        <button
+          class="btn compile-btn"
+          :disabled="isCompiling || !fileContent"
+          @click="handleCompilePDF"
+        >
+          {{ isCompiling ? 'Compiling...' : 'Compile PDF' }}
+        </button>
+      </div>
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
 
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+    <!-- Main Layout -->
+    <div class="main-layout">
+      <!-- Workspace Sidebar -->
+      <WorkspaceSidebar
+        v-if="workspacePath"
+        :workspace-path="workspacePath"
+        :workspace-name="workspaceName"
+        :current-file="currentFile"
+        @file-selected="handleFileSelected"
+        @template-selected="handleTemplateSelected"
+      />
+
+      <!-- Editor Panel -->
+      <div class="editor-panel">
+        <MonacoEditor
+          v-if="editorMode === 'code'"
+          :file-path="currentFile || 'untitled.typ'"
+          :content="fileContent"
+          @content-changed="handleContentChanged"
+        />
+        <RichTextEditor
+          v-else
+          :content="fileContent"
+          @content-changed="handleContentChanged"
+        />
+      </div>
+
+      <!-- Preview Panel -->
+      <div class="preview-panel">
+        <div class="preview-header">
+          <span>PDF Preview</span>
+          <button
+            v-if="pdfPreviewData"
+            class="icon-btn"
+            @click="refreshPreview"
+            title="Refresh Preview"
+          >
+            ↻
+          </button>
+        </div>
+        <PreviewPanel :pdf-data="pdfPreviewData" :is-loading="isCompiling" />
+      </div>
+    </div>
+  </div>
 </template>
 
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
+<script setup lang="ts">
+import { ref, watch, onMounted } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import MonacoEditor from './components/MonacoEditor.vue';
+import RichTextEditor from './components/RichTextEditor.vue';
+import PreviewPanel from './components/PreviewPanel.vue';
+import WorkspaceSelector from './components/WorkspaceSelector.vue';
+import WorkspaceSidebar from './components/WorkspaceSidebar.vue';
 
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
+const currentFile = ref<string | null>(null);
+const fileContent = ref<string>('#set page(margin: 2cm)\n\n= Hello, Typst!\n\nThis is a simple Typst document.\n\n');
+const editorMode = ref<'code' | 'rich'>('code');
+const autoCompile = ref(true);
+const pdfPreviewData = ref<Uint8Array | null>(null);
+const isCompiling = ref(false);
+const showWorkspaceSelector = ref(true); // Show on startup
+const workspacePath = ref<string | null>(null);
+const workspaceName = ref<string>('');
+let compileTimeout: NodeJS.Timeout | null = null;
 
-</style>
+// Auto-compile on content change
+watch(
+  () => fileContent.value,
+  () => {
+    if (autoCompile.value && fileContent.value) {
+      // Debounce compilation
+      if (compileTimeout) {
+        clearTimeout(compileTimeout);
+      }
+      compileTimeout = setTimeout(() => {
+        compileToPDF();
+      }, 1000); // Wait 1 second after typing stops
+    }
+  }
+);
+
+const handleContentChanged = (content: string) => {
+  fileContent.value = content;
+};
+
+const handleNewFile = async () => {
+  try {
+    // Ask user where to save
+    const filePath = await save({
+      filters: [
+        {
+          name: 'Typst',
+          extensions: ['typ'],
+        },
+      ],
+      defaultPath: 'document.typ',
+    });
+
+    if (filePath && typeof filePath === 'string') {
+      // Create empty file
+      const defaultContent = '#set page(margin: 2cm)\n\n= New Document\n\n';
+      await invoke('write_file', {
+        path: filePath,
+        contents: defaultContent,
+      });
+      currentFile.value = filePath;
+      fileContent.value = defaultContent;
+      // Auto-compile if enabled
+      if (autoCompile.value) {
+        await compileToPDF();
+      }
+    }
+  } catch (error) {
+    console.error('Failed to create new file:', error);
+    // If user cancelled, just create untitled document
+    currentFile.value = null;
+    fileContent.value = '#set page(margin: 2cm)\n\n= New Document\n\n';
+  }
+};
+
+const handleOpenFile = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [
+        {
+          name: 'Typst',
+          extensions: ['typ'],
+        },
+      ],
+    });
+    if (selected && typeof selected === 'string') {
+      await handleFileSelected(selected);
+    }
+  } catch (error) {
+    console.error('Failed to open file:', error);
+  }
+};
+
+const handleSaveFile = async () => {
+  if (!currentFile.value) {
+    // Save as new file
+    await handleNewFile();
+    return;
+  }
+
+  try {
+    await invoke('write_file', {
+      path: currentFile.value,
+      contents: fileContent.value,
+    });
+  } catch (error) {
+    console.error('Failed to save file:', error);
+  }
+};
+
+const handleCompilePDF = async () => {
+  await compileToPDF();
+};
+
+const compileToPDF = async () => {
+  if (!fileContent.value.trim()) return;
+
+  isCompiling.value = true;
+  try {
+    let pdfBytes: number[];
+
+    if (currentFile.value) {
+      // Save first if file exists
+      await invoke('write_file', {
+        path: currentFile.value,
+        contents: fileContent.value,
+      });
+      // Compile from file
+      pdfBytes = await invoke<number[]>('compile_typst_to_pdf', {
+        entry_path: currentFile.value,
+      });
+    } else {
+      // Compile from string (untitled document)
+      pdfBytes = await invoke<number[]>('compile_typst_string_to_pdf', {
+        source: fileContent.value,
+        root_dir: null,
+      });
+    }
+
+    pdfPreviewData.value = new Uint8Array(pdfBytes);
+  } catch (error) {
+    console.error('Compilation failed:', error);
+    // Show error in preview or handle it
+  } finally {
+    isCompiling.value = false;
+  }
+};
+
+const refreshPreview = () => {
+  compileToPDF();
+};
+
+const getFileName = (path: string) => {
+  return path.split(/[/\\]/).pop() || path;
+};
+
+const handleWorkspaceSelected = async (path: string) => {
+  workspacePath.value = path;
+  showWorkspaceSelector.value = false;
+  localStorage.setItem('current-workspace', path);
+  
+  try {
+    const config = await invoke<any>('open_workspace', {
+      workspace_path: path,
+    });
+    workspaceName.value = config.name;
+
+    // Load workspace documents (recursive search)
+    const documents = await invoke<string[]>('list_workspace_documents', {
+      workspace_path: path,
+    });
+
+    // Open main.typ if it exists, otherwise first document
+    const mainFile = documents.find((d) => d.endsWith('main.typ')) || documents[0];
+    if (mainFile) {
+      await handleFileSelected(mainFile);
+    }
+  } catch (error) {
+    console.error('Failed to load workspace:', error);
+  }
+};
+
+const handleFileSelected = async (filePath: string) => {
+  try {
+    currentFile.value = filePath;
+    fileContent.value = await invoke('read_file', { path: filePath });
+    // Auto-compile if enabled
+    if (autoCompile.value) {
+      await compileToPDF();
+    }
+  } catch (error) {
+    console.error('Failed to open file:', error);
+  }
+};
+
+const handleTemplateSelected = async (templateName: string) => {
+  if (!workspacePath.value) return;
+  
+  try {
+    const templateContent = await invoke<string>('get_workspace_template', {
+      workspace_path: workspacePath.value,
+      template_name: templateName,
+    });
+    
+    // Create new document from template in workspace root
+    const newFileName = `${templateName}-${Date.now()}.typ`;
+    const newFilePath = `${workspacePath.value}/${newFileName}`;
+    
+    await invoke('write_file', {
+      path: newFilePath,
+      contents: templateContent,
+    });
+    
+    await handleFileSelected(newFilePath);
+  } catch (error) {
+    console.error('Failed to load template:', error);
+  }
+};
+
+onMounted(() => {
+  // Check if there's a saved workspace
+  const savedWorkspace = localStorage.getItem('current-workspace');
+  if (savedWorkspace) {
+    handleWorkspaceSelected(savedWorkspace);
+  }
+  // Initial compile if there's content and workspace is loaded
+  if (!showWorkspaceSelector.value && autoCompile.value && fileContent.value) {
+    setTimeout(() => compileToPDF(), 500);
+  }
+});
+</script>
+
 <style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-.container {
-  margin: 0;
-  padding-top: 10vh;
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell,
+    sans-serif;
+  overflow: hidden;
+}
+
+.app-container {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  height: 100vh;
+  background: #1e1e1e;
+  color: #cccccc;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+.toolbar {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #2d2d30;
+  border-bottom: 1px solid #3e3e42;
+  height: 48px;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
+.toolbar-center {
+  flex: 1;
   text-align: center;
 }
 
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+.file-name {
+  color: #cccccc;
+  font-size: 13px;
 }
 
-button {
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #3e3e42;
+  border: none;
+  border-radius: 4px;
+  color: #cccccc;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.btn:hover:not(:disabled) {
+  background: #505050;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-btn.active {
+  background: #007acc;
+  color: white;
+}
+
+.compile-btn {
+  background: #007acc;
+  color: white;
+}
+
+.compile-btn:hover:not(:disabled) {
+  background: #0098ff;
+}
+
+.divider {
+  width: 1px;
+  height: 24px;
+  background: #3e3e42;
+  margin: 0 8px;
+}
+
+.auto-compile-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
   cursor: pointer;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+.auto-compile-toggle input {
+  cursor: pointer;
 }
 
-input,
-button {
-  outline: none;
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
 }
 
-#greet-input {
-  margin-right: 5px;
+.editor-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid #3e3e42;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+.preview-panel {
+  width: 50%;
+  display: flex;
+  flex-direction: column;
+  background: #252526;
 }
 
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #2d2d30;
+  border-bottom: 1px solid #3e3e42;
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: #cccccc;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.icon-btn:hover {
+  background: #3e3e42;
+}
 </style>

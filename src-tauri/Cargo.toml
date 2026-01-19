@@ -1,11 +1,31 @@
 [package]
 name = "latte"
 version = "0.1.0"
-description = "A Tauri App"
 authors = ["you"]
+license = "Apache 2.0"
 edition = "2021"
+description = """
+Latte is an open-source Typst editing environment that combines the power of a code editor (like Overleaf) with the ease of a Word-style interface.
+It's designed for users of all levels — from Typst veterans to first-time users — to write beautiful documents faster and with more flexibility.
+"""
+repository = "https://github.com/latte-org/Latte.git"
+readme = "README.md"
+keywords = ["typst", "typesetting", "editor", "document", "pdf"]
+categories = [
+    "rendering",
+    "science",
+    "text-processing",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace.lints.rust]
+# FIXME(CraftSpider): Switch from error-chain to a newer package, as it's a deprecated project
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(has_error_description_deprecated)'] }
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -20,6 +40,39 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+typst = "0.14.0"
+typst-pdf = "0.14.0"
+typst-library = "0.14.0"
+typst-assets = "0.14.0"
+typst-ide = "0.14.0"
+typst-html = "0.14.0"
+typst-utils = "0.14.0"
+tempfile = "3"
 
+[package.metadata.vcpkg]
+git = "https://github.com/microsoft/vcpkg"
+rev = "be1ae8e5c5bc79aac1b8f593f5554aee1cfde54f"
+
+[package.metadata.vcpkg.target]
+x86_64-apple-darwin = { triplet = "x64-osx", install = ["fontconfig", "freetype", "harfbuzz[graphite2]", "icu"] }
+aarch64-apple-darwin = { triplet = "arm64-osx", install = [
+    "fontconfig",
+    "freetype",
+    "harfbuzz[graphite2]",
+    "icu",
+] }
+x86_64-unknown-linux-gnu = { install = [
+    "fontconfig",
+    "freetype",
+    "harfbuzz[graphite2]",
+    "icu",
+] }
+x86_64-pc-windows-msvc = { triplet = "x64-windows-static-release", install = [
+    "fontconfig",
+    "freetype",
+    "harfbuzz[graphite2]",
+    "icu",
+] }
