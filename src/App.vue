@@ -34,6 +34,32 @@
           <button class="btn" @click="showWorkspaceSelector = true">Open Folder</button>
         </div>
       </div>
+      
+      <!-- Search View -->
+      <div v-show="activeView === 'search'" class="sidebar-container">
+        <div class="sidebar-header">
+           <h3>Search</h3>
+        </div>
+        <div class="empty-sidebar">
+          <p style="color: #858585; font-size: 13px;">Search functionality coming soon.</p>
+        </div>
+      </div>
+
+      <!-- Settings View -->
+      <div v-show="activeView === 'settings'" class="sidebar-container">
+        <div class="sidebar-header">
+           <h3>Settings</h3>
+        </div>
+        <div class="empty-sidebar">
+           <div class="setting-item">
+             <label class="auto-compile-toggle">
+               <input type="checkbox" v-model="autoCompile" />
+               <span>Auto-compile on type</span>
+             </label>
+           </div>
+           <p style="color: #858585; font-size: 13px; margin-top: 20px;">More settings coming soon.</p>
+        </div>
+      </div>
 
       <!-- Main Content Area -->
       <div class="content-area">
@@ -106,6 +132,11 @@
               </button>
             </div>
             <PreviewPanel :pdf-data="pdfPreviewData" :is-loading="isCompiling" />
+            <DiagnosticsPanel 
+               :diagnostics="diagnostics" 
+               :visible="showDiagnostics"
+               @close="showDiagnostics = false"
+            />
           </div>
         </div>
       </div>
@@ -114,13 +145,14 @@
     <!-- Status Bar -->
     <StatusBar
       :file-path="currentFile"
-      :status-message="isCompiling ? 'Compiling...' : 'Ready'"
+      :status-message="statusMessage"
+      @click="toggleDiagnostics"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import MonacoEditor from './components/MonacoEditor.vue';
@@ -132,6 +164,7 @@ import TemplateModal from './components/TemplateModal.vue';
 import ActivityBar from './components/ActivityBar.vue';
 import EditorTabs, { OpenFile } from './components/EditorTabs.vue';
 import StatusBar from './components/StatusBar.vue';
+import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 
 // State
 const activeView = ref('explorer');
@@ -148,6 +181,9 @@ const showTemplateModal = ref(false);
 const workspacePath = ref<string | null>(null);
 const workspaceName = ref<string>('');
 const sidebarKey = ref(0);
+const diagnostics = ref<any[]>([]);
+const showDiagnostics = ref(false);
+const statusMessage = ref('Ready');
 let compileTimeout: NodeJS.Timeout | null = null;
 
 // Initial Setup
@@ -161,65 +197,81 @@ onMounted(() => {
   if (openFiles.value.length === 0) {
     createUntitledTab();
   }
+
+  window.addEventListener('keydown', handleKeydown);
 });
 
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+});
+
+const handleKeydown = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    handleSaveFile();
+  }
+};
+
 const createUntitledTab = () => {
+  const content = '#set page(margin: 2cm)\n\n= New Document\n\n';
   const newTab: OpenFile = {
-    path: 'Untitled-1',
-    isDirty: false
+    path: `Untitled-${Date.now()}`,
+    isDirty: false,
+    content: content
   };
   openFiles.value.push(newTab);
   activeFileIndex.value = openFiles.value.length - 1;
   currentFile.value = null;
-  fileContent.value = '#set page(margin: 2cm)\n\n= New Document\n\n';
+  fileContent.value = content;
 };
 
 // Tabs Logic
 const handleTabSelected = async (index: number) => {
   if (index === activeFileIndex.value) return;
   
-  // Save content of current tab to memory/state if needed?
-  // Ideally we should have a map of contents. For now, we might lose unsaved changes if we switch tabs purely by path re-read.
-  // Implementation note: a real editor holds content in memory for all tabs.
-  // To keep it simple: we warn if switching from dirty tab? 
-  // BETTER: Store content in `openFiles` or a separate map.
-  
-  // Let's implement simple content caching
-  // Save current content to the previous tab object (we need to extend OpenFile interface)
-  // For now, let's just switch and re-read file if it exists.
-  // Warning: Switching tabs on an unsaved 'Untitled' file or dirty file will lose changes in this simple impl.
-  // We need to upgrade OpenFile to hold content.
+  // Save current content to the previous tab object
+  if (activeFileIndex.value >= 0 && activeFileIndex.value < openFiles.value.length) {
+    openFiles.value[activeFileIndex.value].content = fileContent.value;
+  }
   
   const file = openFiles.value[index];
+  currentFile.value = file.path.startsWith('Untitled') ? null : file.path;
   
-  if (file.path.startsWith('Untitled')) {
-     currentFile.value = null;
-     // If we stored content in tab, restore it. If not, it's problematic.
-     // For this iteration, let's assume we re-read from disk for real files.
-  } else {
-     currentFile.value = file.path;
+  // Restore content from tab state
+  // For saved files, we might want to check disk, but for now cache is source of truth for UI
+  // If content is empty and it's a real file, read from disk (first load)
+  if (!file.content && !file.path.startsWith('Untitled')) {
      try {
-       fileContent.value = await invoke('read_file', { path: file.path });
-       compileToPDF();
+       file.content = await invoke('read_file', { path: file.path });
      } catch (e) {
        console.error(e);
      }
   }
   
+  fileContent.value = file.content;
   activeFileIndex.value = index;
+  
+  // Trigger compile for the new active tab
+  compileToPDF();
 };
 
 const handleTabClosed = (index: number) => {
   // If closing active tab, switch to another
   const isActive = index === activeFileIndex.value;
+  
+  // Warn if dirty? For now just close.
   openFiles.value.splice(index, 1);
   
   if (openFiles.value.length === 0) {
     createUntitledTab();
   } else if (isActive) {
-    activeFileIndex.value = Math.max(0, index - 1);
-    handleTabSelected(activeFileIndex.value);
+    // If we closed the active tab, pick the previous one or the first one
+    const newIndex = Math.max(0, index - 1);
+    // We need to set activeFileIndex to -1 temporarily so handleTabSelected treats it as a change
+    activeFileIndex.value = -1; 
+    handleTabSelected(newIndex);
   } else if (index < activeFileIndex.value) {
+    // If we closed a tab before the active one, decrement index
     activeFileIndex.value--;
   }
 };
@@ -268,9 +320,10 @@ const handleSaveFile = async () => {
 
 const handleContentChanged = (content: string) => {
   fileContent.value = content;
-  if (activeFileIndex.value >= 0) {
-    openFiles.value[activeFileIndex.value].isDirty = true;
-  }
+    if (activeFileIndex.value >= 0) {
+      openFiles.value[activeFileIndex.value].content = content;
+      openFiles.value[activeFileIndex.value].isDirty = true;
+    }
 };
 
 // ... copy other existing methods ...
@@ -278,25 +331,35 @@ const handleContentChanged = (content: string) => {
 
 // Re-implement handleFileSelected to use tabs
 const handleFileSelected = async (filePath: string) => {
+  // Save current tab content before switching
+  if (activeFileIndex.value >= 0 && activeFileIndex.value < openFiles.value.length) {
+    openFiles.value[activeFileIndex.value].content = fileContent.value;
+  }
+
   // Check if already open
   const existingIndex = openFiles.value.findIndex(f => f.path === filePath);
   if (existingIndex >= 0) {
-    activeFileIndex.value = existingIndex;
+    // If already open, just switch to it (which will load content from cache or disk)
     handleTabSelected(existingIndex);
     return;
   }
   
   // Add new tab
-  openFiles.value.push({ path: filePath, isDirty: false });
+  // Read content first
+  let content = '';
+  try {
+    content = await invoke('read_file', { path: filePath });
+  } catch (e) {
+    console.error(e);
+    return;
+  }
+
+  openFiles.value.push({ path: filePath, isDirty: false, content: content });
   activeFileIndex.value = openFiles.value.length - 1;
   
   currentFile.value = filePath;
-  try {
-    fileContent.value = await invoke('read_file', { path: filePath });
-    compileToPDF();
-  } catch (e) {
-    console.error(e);
-  }
+  fileContent.value = content;
+  compileToPDF();
 };
 
 // Auto-compile watcher
@@ -327,9 +390,16 @@ const handleTemplateSelected = async (templateName: string, isWorkspace: boolean
     
     // Create new untitled tab with content
     const newTab: OpenFile = {
-        path: `Untitled-${templateName}`,
-        isDirty: true
+        path: `Untitled-${templateName}-${Date.now()}`,
+        isDirty: true,
+        content: content
     };
+    
+    // Save current tab content before switching
+    if (activeFileIndex.value >= 0 && activeFileIndex.value < openFiles.value.length) {
+      openFiles.value[activeFileIndex.value].content = fileContent.value;
+    }
+
     openFiles.value.push(newTab);
     activeFileIndex.value = openFiles.value.length - 1;
     currentFile.value = null;
@@ -396,6 +466,8 @@ const compileToPDF = async () => {
   if (!fileContent.value.trim()) return;
 
   isCompiling.value = true;
+  statusMessage.value = 'Compiling...';
+  
   try {
     let pdfBytes: number[];
 
@@ -409,20 +481,49 @@ const compileToPDF = async () => {
       pdfBytes = await invoke<number[]>('compile_typst_to_pdf', {
         entry_path: currentFile.value,
       });
+      
+      // Get diagnostics
+      diagnostics.value = await invoke('get_typst_diagnostics', {
+        entry_path: currentFile.value,
+      });
     } else {
       // Compile from string
+      // Note: get_typst_diagnostics might not work well with string compilation in current backend
+      // So we assume success if no error thrown, or parse error from catch
       pdfBytes = await invoke<number[]>('compile_typst_string_to_pdf', {
         source: fileContent.value,
-        root_dir: workspacePath.value, // Pass workspace as root if available
+        root_dir: workspacePath.value, 
       });
+      diagnostics.value = [];
     }
 
     pdfPreviewData.value = new Uint8Array(pdfBytes);
-  } catch (error) {
+    
+    if (diagnostics.value.length > 0) {
+      statusMessage.value = `Compiled with ${diagnostics.value.length} problems`;
+      showDiagnostics.value = true;
+    } else {
+      statusMessage.value = 'Ready';
+    }
+  } catch (error: any) {
     console.error('Compilation failed:', error);
+    statusMessage.value = 'Compilation Failed';
+    
+    // Parse error string into diagnostics if possible, or just show general error
+    // The backend returns a string "Compilation errors: ..."
+    const errorStr = typeof error === 'string' ? error : JSON.stringify(error);
+    diagnostics.value = [{
+       severity: 'error',
+       message: errorStr
+    }];
+    showDiagnostics.value = true;
   } finally {
     isCompiling.value = false;
   }
+};
+
+const toggleDiagnostics = () => {
+  showDiagnostics.value = !showDiagnostics.value;
 };
 
 const refreshPreview = () => compileToPDF();
@@ -520,6 +621,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .empty-sidebar {
   padding: 20px;
   text-align: center;
+}
+
+.sidebar-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #3e3e42;
+}
+
+.sidebar-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cccccc;
+}
+
+.setting-item {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
 }
 
 /* Re-use preview header styles */

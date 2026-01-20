@@ -21,6 +21,7 @@
 export interface OpenFile {
   path: string;
   isDirty: boolean;
+  content: string;
 }
 
 defineProps<{
