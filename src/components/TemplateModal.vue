@@ -5,16 +5,37 @@
         <h2>Choose a Template</h2>
         <button class="close-btn" @click="$emit('close')">×</button>
       </div>
-      <div class="templates-grid">
-        <div
-          v-for="template in templates"
-          :key="template"
-          class="template-card"
-          @click="selectTemplate(template)"
-        >
-          <div class="template-icon">{{ getTemplateIcon(template) }}</div>
-          <h3>{{ getTemplateName(template) }}</h3>
-          <p>{{ getTemplateDescription(template) }}</p>
+      <div class="modal-body">
+        <div class="template-section">
+          <h3>Standard Templates</h3>
+          <div class="templates-grid">
+            <div
+              v-for="template in globalTemplates"
+              :key="template"
+              class="template-card"
+              @click="selectTemplate(template, false)"
+            >
+              <div class="template-icon">{{ getTemplateIcon(template) }}</div>
+              <h3>{{ getTemplateName(template) }}</h3>
+              <p>{{ getTemplateDescription(template) }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="workspacePath && workspaceTemplates.length > 0" class="template-section">
+          <h3>Workspace Templates</h3>
+          <div class="templates-grid">
+            <div
+              v-for="template in workspaceTemplates"
+              :key="template"
+              class="template-card"
+              @click="selectTemplate(template, true)"
+            >
+              <div class="template-icon">📂</div>
+              <h3>{{ template }}</h3>
+              <p>Custom workspace template</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -25,23 +46,34 @@
 import { ref, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 
-const emit = defineEmits<{
-  close: [];
-  'template-selected': [name: string];
+const props = defineProps<{
+  workspacePath: string | null;
 }>();
 
-const templates = ref<string[]>([]);
+const emit = defineEmits<{
+  close: [];
+  'template-selected': [name: string, isWorkspace: boolean];
+}>();
+
+const globalTemplates = ref<string[]>([]);
+const workspaceTemplates = ref<string[]>([]);
 
 onMounted(async () => {
   try {
-    templates.value = await invoke<string[]>('list_templates');
+    globalTemplates.value = await invoke<string[]>('list_templates');
+    
+    if (props.workspacePath) {
+      workspaceTemplates.value = await invoke<string[]>('list_workspace_templates', {
+        workspace_path: props.workspacePath,
+      });
+    }
   } catch (error) {
     console.error('Failed to load templates:', error);
   }
 });
 
-const selectTemplate = (template: string) => {
-  emit('template-selected', template);
+const selectTemplate = (template: string, isWorkspace: boolean) => {
+  emit('template-selected', template, isWorkspace);
 };
 
 const getTemplateIcon = (template: string): string => {
@@ -101,6 +133,7 @@ const getTemplateDescription = (template: string): string => {
   justify-content: space-between;
   padding: 20px 24px;
   border-bottom: 1px solid #3e3e42;
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -127,12 +160,28 @@ const getTemplateDescription = (template: string): string => {
   background: #3e3e42;
 }
 
+.modal-body {
+  overflow-y: auto;
+  padding: 24px;
+  flex: 1;
+}
+
+.template-section {
+  margin-bottom: 32px;
+}
+
+.template-section h3 {
+  font-size: 14px;
+  color: #858585;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+
 .templates-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 16px;
-  padding: 24px;
-  overflow-y: auto;
 }
 
 .template-card {

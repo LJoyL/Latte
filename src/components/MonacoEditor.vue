@@ -6,6 +6,9 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import loader from '@monaco-editor/loader';
+import * as Y from 'yjs';
+import { MonacoBinding } from 'y-monaco';
+import { CollaborationManager } from '../utils/collaboration';
 
 const props = defineProps<{
   filePath: string;
@@ -19,6 +22,7 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLElement | null>(null);
 let editor: any = null;
 let monaco: any = null;
+let binding: MonacoBinding | null = null;
 
 // Configure Monaco for Typst
 const configureMonaco = (monacoInstance: any) => {
@@ -113,7 +117,30 @@ onMounted(async () => {
       insertSpaces: true,
     });
 
+    // Set up Collaboration
+    const collabManager = CollaborationManager.getInstance();
+    const yText = collabManager.ydoc.getText('monaco');
+    
+    // Bind Yjs text to Monaco model
+    // Note: MonacoBinding requires the Monaco editor instance, the Monaco model, and the Y.Text
+    binding = new MonacoBinding(
+      yText,
+      editor.getModel(),
+      new Set([editor]),
+      collabManager.provider?.awareness || null
+    );
+
+    // Initial sync from props content if Yjs doc is empty
+    if (yText.toString() === '') {
+        yText.insert(0, props.content);
+    } else {
+        // If Yjs has content, it wins? Or we overwrite?
+        // For simplicity in this demo, if Yjs is empty, we init it.
+        // If connected to a room with data, that data will load.
+    }
+
     // Listen for content changes
+    // MonacoBinding handles the sync, but we still need to emit for auto-compile
     editor.onDidChangeModelContent(() => {
       const content = editor.getValue();
       emit('content-changed', content);
@@ -162,6 +189,9 @@ const getColumnNumber = (offset: number): number => {
 };
 
 onUnmounted(() => {
+  if (binding) {
+    binding.destroy();
+  }
   if (editor) {
     editor.dispose();
   }
