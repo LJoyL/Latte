@@ -45,6 +45,11 @@
         </div>
       </div>
 
+      <!-- Review View -->
+      <div v-show="activeView === 'review'" class="sidebar-container">
+        <CommentsSidebar />
+      </div>
+
       <!-- Settings View -->
       <div v-show="activeView === 'settings'" class="sidebar-container">
         <div class="sidebar-header">
@@ -165,6 +170,7 @@ import ActivityBar from './components/ActivityBar.vue';
 import EditorTabs, { OpenFile } from './components/EditorTabs.vue';
 import StatusBar from './components/StatusBar.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
+import CommentsSidebar from './components/CommentsSidebar.vue';
 
 // State
 const activeView = ref('explorer');

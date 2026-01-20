@@ -1,46 +1,119 @@
 <template>
   <div class="rich-text-editor">
-    <div class="editor-toolbar">
+    <div v-if="editor" class="editor-toolbar">
       <div class="toolbar-group">
-        <button class="toolbar-btn" @click="insertH1" title="Heading 1">H1</button>
-        <button class="toolbar-btn" @click="insertH2" title="Heading 2">H2</button>
-        <button class="toolbar-btn" @click="insertH3" title="Heading 3">H3</button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('heading', { level: 1 }) }"
+          @click="editor.chain().focus().toggleHeading({ level: 1 }).run()"
+        >
+          H1
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('heading', { level: 2 }) }"
+          @click="editor.chain().focus().toggleHeading({ level: 2 }).run()"
+        >
+          H2
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('heading', { level: 3 }) }"
+          @click="editor.chain().focus().toggleHeading({ level: 3 }).run()"
+        >
+          H3
+        </button>
       </div>
       <div class="divider"></div>
       <div class="toolbar-group">
-        <button class="toolbar-btn" @click="insertBold" title="Bold"><strong>B</strong></button>
-        <button class="toolbar-btn" @click="insertItalic" title="Italic"><em>I</em></button>
-        <button class="toolbar-btn" @click="insertQuote" title="Quote">❞</button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('bold') }"
+          @click="editor.chain().focus().toggleBold().run()"
+        >
+          B
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('italic') }"
+          @click="editor.chain().focus().toggleItalic().run()"
+        >
+          I
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('blockquote') }"
+          @click="editor.chain().focus().toggleBlockquote().run()"
+        >
+          ❞
+        </button>
       </div>
       <div class="divider"></div>
       <div class="toolbar-group">
-        <button class="toolbar-btn" @click="insertList" title="Bullet List">• List</button>
-        <button class="toolbar-btn" @click="insertEnum" title="Numbered List">1. List</button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('bulletList') }"
+          @click="editor.chain().focus().toggleBulletList().run()"
+        >
+          • List
+        </button>
+        <button
+          class="toolbar-btn"
+          :class="{ 'is-active': editor.isActive('orderedList') }"
+          @click="editor.chain().focus().toggleOrderedList().run()"
+        >
+          1. List
+        </button>
       </div>
       <div class="divider"></div>
       <div class="toolbar-group">
-        <button class="toolbar-btn" @click="insertLink" title="Link">🔗</button>
-        <button class="toolbar-btn" @click="insertImage" title="Image">🖼️</button>
-        <button class="toolbar-btn" @click="insertTable" title="Table">📅</button>
-        <button class="toolbar-btn" @click="insertEquation" title="Equation">∑</button>
-        <button class="toolbar-btn" @click="insertCodeBlock" title="Code Block">Code</button>
+        <button class="toolbar-btn" @click="addComment" title="Add Comment">
+          💬
+        </button>
       </div>
     </div>
-    <textarea
-      ref="textareaRef"
-      v-model="localContent"
-      class="rich-textarea"
-      placeholder="Start typing your document..."
-      @input="handleInput"
-    ></textarea>
+    
+    <editor-content :editor="editor" class="editor-content" />
+    
     <div class="editor-hint">
-      <p>💡 Writing in simplified mode. Use toolbar to insert formatting.</p>
+      <p>💡 Rich Text Mode (TipTap). Edits are converted to Typst.</p>
     </div>
+
+    <!-- Floating Comment Menu (Bubble Menu) -->
+    <bubble-menu
+      v-if="editor"
+      :editor="editor"
+      :tippy-options="{ duration: 100 }"
+      class="bubble-menu"
+    >
+      <button
+        class="bubble-btn"
+        @click="editor.chain().focus().toggleBold().run()"
+        :class="{ 'is-active': editor.isActive('bold') }"
+      >
+        B
+      </button>
+      <button
+        class="bubble-btn"
+        @click="editor.chain().focus().toggleItalic().run()"
+        :class="{ 'is-active': editor.isActive('italic') }"
+      >
+        I
+      </button>
+      <button class="bubble-btn" @click="addComment">
+        💬
+      </button>
+    </bubble-menu>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, onBeforeUnmount, onMounted } from 'vue';
+import { Editor, EditorContent, BubbleMenu } from '@tiptap/vue-3';
+import StarterKit from '@tiptap/starter-kit';
+import Placeholder from '@tiptap/extension-placeholder';
+import Highlight from '@tiptap/extension-highlight';
+import { TypstConverter } from '../utils/typst-converter';
 
 const props = defineProps<{
   content: string;
@@ -50,67 +123,61 @@ const emit = defineEmits<{
   'content-changed': [content: string];
 }>();
 
-const textareaRef = ref<HTMLTextAreaElement | null>(null);
-const localContent = ref(props.content);
+const editor = ref<Editor | null>(null);
+const isUpdating = ref(false);
+
+onMounted(() => {
+  editor.value = new Editor({
+    extensions: [
+      StarterKit,
+      Placeholder.configure({
+        placeholder: 'Start writing...',
+      }),
+      Highlight.configure({ multicolor: true }), // Using Highlight as 'Comment' visual for now
+    ],
+    content: TypstConverter.toHtml(props.content),
+    editorProps: {
+      attributes: {
+        class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none',
+      },
+    },
+    onUpdate: ({ editor }) => {
+      isUpdating.value = true;
+      const html = editor.getHTML();
+      const typst = TypstConverter.fromHtml(html);
+      emit('content-changed', typst);
+      setTimeout(() => { isUpdating.value = false; }, 0);
+    },
+  });
+});
 
 watch(
   () => props.content,
   (newContent) => {
-    if (localContent.value !== newContent) {
-      localContent.value = newContent;
+    if (!editor.value || isUpdating.value) return;
+    
+    // Check if content is actually different to avoid cursor jumps
+    // This is tricky because round-trip conversion isn't perfect
+    // For now, we only update if the diff is significant or if completely replaced
+    
+    // Simple heuristic: if we are not typing (isUpdating is false), assume it's an external change (file load, tab switch)
+    // Convert new Typst to HTML
+    const newHtml = TypstConverter.toHtml(newContent);
+    // Only set if different from current editor HTML
+    if (editor.value.getHTML() !== newHtml) {
+        editor.value.commands.setContent(newHtml);
     }
   }
 );
 
-const handleInput = () => {
-  emit('content-changed', localContent.value);
-};
+onBeforeUnmount(() => {
+  editor.value?.destroy();
+});
 
-const insertAtCursor = (text: string, selectionOffset = 0) => {
-  if (!textareaRef.value) return;
-  const textarea = textareaRef.value;
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  
-  // If there is a selection, wrap it if text contains a placeholder like "text" or "content"
-  // For simplicity, we just insert.
-  // Advanced: we could wrap selected text.
-  
-  localContent.value =
-    localContent.value.substring(0, start) + text + localContent.value.substring(end);
-  
-  // Set cursor position
-  setTimeout(() => {
-    textarea.focus();
-    const newPos = start + text.length + selectionOffset;
-    textarea.setSelectionRange(newPos, newPos);
-  }, 0);
-  
-  emit('content-changed', localContent.value);
-};
-
-const insertH1 = () => insertAtCursor('= ');
-const insertH2 = () => insertAtCursor('== ');
-const insertH3 = () => insertAtCursor('=== ');
-
-const insertBold = () => insertAtCursor('*bold*', -1);
-const insertItalic = () => insertAtCursor('_italic_', -1);
-const insertQuote = () => insertAtCursor('> ');
-
-const insertList = () => insertAtCursor('- ');
-const insertEnum = () => insertAtCursor('+ ');
-
-const insertLink = () => insertAtCursor('#link("url")[text]', -6);
-const insertImage = () => insertAtCursor('#image("path/to/image.png")', -2);
-
-const insertTable = () => {
-  insertAtCursor('#table(\n  columns: (1fr, 1fr),\n  [Header 1], [Header 2],\n  [Content 1], [Content 2]\n)');
-};
-
-const insertEquation = () => insertAtCursor('$ x = y $', -2);
-
-const insertCodeBlock = () => {
-  insertAtCursor('```\n\n```', -4);
+const addComment = () => {
+  // For MVP, we use Highlight to simulate a comment
+  // In a real implementation, we'd add a mark with attributes { id, author, text }
+  editor.value?.chain().focus().toggleHighlight().run();
 };
 </script>
 
@@ -148,13 +215,16 @@ const insertCodeBlock = () => {
   font-size: 13px;
   transition: background 0.2s;
   min-width: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-weight: 500;
 }
 
 .toolbar-btn:hover {
   background: #3e3e42;
+}
+
+.toolbar-btn.is-active {
+  background: #007acc;
+  color: white;
 }
 
 .divider {
@@ -164,18 +234,97 @@ const insertCodeBlock = () => {
   margin: 0 8px;
 }
 
-.rich-textarea {
+.editor-content {
   flex: 1;
-  width: 100%;
+  overflow-y: auto;
   padding: 24px;
-  background: #1e1e1e;
   color: #cccccc;
-  border: none;
+}
+
+/* TipTap Specific Styles */
+:deep(.ProseMirror) {
   outline: none;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 15px;
+  min-height: 100px;
+}
+
+:deep(.ProseMirror p) {
+  margin-bottom: 0.8em;
   line-height: 1.6;
-  resize: none;
+}
+
+:deep(.ProseMirror h1) {
+  font-size: 2em;
+  font-weight: bold;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+:deep(.ProseMirror h2) {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+:deep(.ProseMirror h3) {
+  font-size: 1.25em;
+  font-weight: bold;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+:deep(.ProseMirror ul) {
+  list-style-type: disc;
+  padding-left: 1.5em;
+  margin-bottom: 0.8em;
+}
+
+:deep(.ProseMirror ol) {
+  list-style-type: decimal;
+  padding-left: 1.5em;
+  margin-bottom: 0.8em;
+}
+
+:deep(.ProseMirror blockquote) {
+  border-left: 3px solid #007acc;
+  padding-left: 1em;
+  margin-left: 0;
+  font-style: italic;
+  color: #a0a0a0;
+}
+
+/* Highlight (Comment) Style */
+:deep(mark) {
+  background-color: #5d4d00;
+  color: inherit;
+  border-bottom: 2px solid #cca700;
+  cursor: pointer;
+}
+
+.bubble-menu {
+  display: flex;
+  background-color: #252526;
+  padding: 4px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #3e3e42;
+}
+
+.bubble-btn {
+  background: transparent;
+  border: none;
+  color: #cccccc;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.bubble-btn:hover {
+  background: #3e3e42;
+}
+
+.bubble-btn.is-active {
+  background: #007acc;
 }
 
 .editor-hint {
