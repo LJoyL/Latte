@@ -111,31 +111,35 @@
 import { ref, watch, onBeforeUnmount, onMounted } from 'vue';
 import { Editor, EditorContent, BubbleMenu } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
-import Placeholder from '@tiptap/extension-placeholder';
-import Highlight from '@tiptap/extension-highlight';
-import { TypstConverter } from '../utils/typst-converter';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import { CollaborationManager } from '../utils/collaboration';
 
-const props = defineProps<{
-  content: string;
-}>();
-
-const emit = defineEmits<{
-  'content-changed': [content: string];
-}>();
-
-const editor = ref<Editor | null>(null);
-const isUpdating = ref(false);
+// ... other imports
 
 onMounted(() => {
+  const collabManager = CollaborationManager.getInstance();
+  
   editor.value = new Editor({
     extensions: [
-      StarterKit,
+      StarterKit.configure({
+        // Disable history because Collaboration handles it
+        history: false,
+      }),
+      Collaboration.configure({
+        document: collabManager.ydoc,
+        field: 'document', // Share RichText content in 'document' field
+      }),
+      CollaborationCursor.configure({
+        provider: collabManager.provider,
+        user: collabManager.currentUser,
+      }),
       Placeholder.configure({
         placeholder: 'Start writing...',
       }),
-      Highlight.configure({ multicolor: true }), // Using Highlight as 'Comment' visual for now
+      Highlight.configure({ multicolor: true }), 
     ],
-    content: TypstConverter.toHtml(props.content),
+    // ... rest of config
     editorProps: {
       attributes: {
         class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none',
@@ -148,7 +152,10 @@ onMounted(() => {
       emit('content-changed', typst);
       setTimeout(() => { isUpdating.value = false; }, 0);
     },
-  });
+// Watch awareness changes to update cursor colors if user changes them elsewhere
+  watch(() => collabManager.currentUser, (newUser) => {
+    editor.value?.commands.updateUser(newUser);
+  }, { deep: true });
 });
 
 watch(

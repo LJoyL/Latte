@@ -62,7 +62,33 @@
                <span>Auto-compile on type</span>
              </label>
            </div>
-           <p style="color: #858585; font-size: 13px; margin-top: 20px;">More settings coming soon.</p>
+           
+           <!-- Collaboration Settings -->
+           <div class="sidebar-header" style="margin-top: 20px;">
+             <h3>Collaboration</h3>
+           </div>
+           <div class="collab-settings" style="padding: 16px;">
+             <div class="form-group">
+               <label>Server URL</label>
+               <input v-model="collabServerUrl" placeholder="ws://localhost:1234" class="input-field" />
+             </div>
+             <div class="form-group">
+               <label>Room Name</label>
+               <input v-model="collabRoom" placeholder="my-room" class="input-field" />
+             </div>
+             <div class="form-group">
+               <label>Username</label>
+               <input v-model="collabUsername" placeholder="Guest" class="input-field" />
+             </div>
+             <button 
+               class="btn full-width" 
+               @click="toggleCollaboration"
+               :class="{ 'connected': collabStatus === 'connected', 'connecting': collabStatus === 'connecting' }"
+             >
+               {{ collabBtnText }}
+             </button>
+             <p class="status-text">Status: {{ collabStatus }}</p>
+           </div>
         </div>
       </div>
 
@@ -171,6 +197,7 @@ import EditorTabs, { OpenFile } from './components/EditorTabs.vue';
 import StatusBar from './components/StatusBar.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import CommentsSidebar from './components/CommentsSidebar.vue';
+import { CollaborationManager } from './utils/collaboration';
 
 // State
 const activeView = ref('explorer');
@@ -191,6 +218,30 @@ const diagnostics = ref<any[]>([]);
 const showDiagnostics = ref(false);
 const statusMessage = ref('Ready');
 let compileTimeout: NodeJS.Timeout | null = null;
+
+// Collaboration State
+const collabManager = CollaborationManager.getInstance();
+const collabStatus = collabManager.status;
+const collabServerUrl = ref('wss://demos.yjs.dev');
+const collabRoom = ref('latte-demo-room');
+const collabUsername = ref(collabManager.currentUser.name);
+
+const collabBtnText = ref('Connect');
+
+watch(collabStatus, (newStatus) => {
+  if (newStatus === 'connected') collabBtnText.value = 'Disconnect';
+  else if (newStatus === 'connecting') collabBtnText.value = 'Connecting...';
+  else collabBtnText.value = 'Connect';
+});
+
+const toggleCollaboration = () => {
+  if (collabStatus.value === 'connected' || collabStatus.value === 'connecting') {
+    collabManager.disconnect();
+  } else {
+    collabManager.updateUserState(collabUsername.value);
+    collabManager.connect(collabRoom.value, collabServerUrl.value);
+  }
+};
 
 // Initial Setup
 onMounted(() => {
@@ -659,12 +710,48 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   height: 32px; /* Match toolbar mini */
 }
 
-.auto-compile-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.input-field {
+  width: 100%;
+  background: #3e3e42;
+  border: 1px solid #2d2d30;
+  color: #cccccc;
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.form-group {
+  margin-bottom: 12px;
+}
+
+.form-group label {
   font-size: 11px;
-  margin-left: 8px;
-  cursor: pointer;
+  color: #858585;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.btn.full-width {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.btn.connected {
+  background: #2e7d32;
+  color: white;
+}
+
+.btn.connecting {
+  background: #d4a72c;
+  color: black;
+}
+
+.status-text {
+  font-size: 11px;
+  color: #858585;
+  margin-top: 8px;
+  text-align: center;
 }
 </style>
